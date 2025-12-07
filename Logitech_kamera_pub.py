@@ -1,8 +1,165 @@
 #!/usr/bin/env python3
 """
-Logitech C270 USB Kamera Publisher Node
-Tüm kamera stream'lerini ROS topic'leri olarak yayınlar
-Logitech kameradan alınan kamera görüntülerini ROS sistem mimarisine yayınlar
+================================================================================
+                    LOGITECH C270 USB KAMERA ROS 2 PUBLISHER NODE
+================================================================================
+
+GENEL BAKIŞ:
+------------
+Bu modül, Logitech C270 USB web kamerasından görüntü akışlarını alarak ROS 2
+(Robot Operating System 2) ekosisteminde topic'ler aracılığıyla yayınlayan
+bir publisher node implementasyonudur. Roverrımızın ros sistemi için yazılacak olan
+ros kodlarına (nodelara) görüntü işleme, nesne tanıma gibi görevler için temel görüntü kaynağı sağlar.
+
+MİMARİ YAPI:
+------------
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
+│  Logitech C270  │────▶│  LogitechPublisher   │────▶│   ROS 2 Topics      │
+│  USB Kamera     │     │  Node                │     │                     │
+│  /dev/video0    │     │  (OpenCV + cv_bridge)│     │  /logitech/image_*  │
+└─────────────────┘     └──────────────────────┘     └─────────────────────┘
+
+ÇALIŞMA PRENSİBİ:
+-----------------
+1. BAŞLATMA (Initialization):
+   - Node parametreleri okunur (kamera_id, çözünürlük, FPS, vb.)
+   - ROS 2 publisher'ları oluşturulur
+   - OpenCV VideoCapture ile kamera bağlantısı kurulur
+   - Kamera ayarları (exposure, brightness, contrast) yapılandırılır
+
+2. FRAME DÖNGÜSÜ (Main Loop):
+   - Timer callback'i belirlenen FPS'e göre tetiklenir (varsayılan 30 Hz)
+   - Her tetiklemede kameradan bir frame okunur
+   - Frame, farklı formatlara dönüştürülür ve ilgili topic'lere publish edilir
+
+3. YAYIN AKIŞI (Publishing Pipeline):
+   
+   [Kamera Frame] ──┬──▶ [Raw BGR8] ──────────────▶ /logitech/image_raw
+                    │
+                    ├──▶ [JPEG Encode] ───────────▶ /logitech/image_compressed
+                    │
+                    ├──▶ [Grayscale Convert] ─────▶ /logitech/image_mono
+                    │
+                    ├──▶ [Undistort*] ────────────▶ /logitech/image_rect
+                    │
+                    └──▶ [Camera Matrix] ─────────▶ /logitech/camera_info
+
+   * Rectified görüntü şu an kalibrasyon olmadan ham frame olarak yayınlanır
+
+YAYINLANAN TOPIC'LER:
+---------------------
+┌────────────────────────────┬─────────────────┬────────────────────────────┐
+│ Topic Adı                  │ Mesaj Tipi      │ Açıklama                   │
+├────────────────────────────┼─────────────────┼────────────────────────────┤
+│ /logitech/image_raw        │ sensor_msgs/    │ Ham RGB görüntü (BGR8)     │
+│                            │ Image           │ Tam çözünürlük, işlenmemiş │
+├────────────────────────────┼─────────────────┼────────────────────────────┤
+│ /logitech/image_compressed │ sensor_msgs/    │ JPEG sıkıştırılmış görüntü │
+│                            │ CompressedImage │ Bant genişliği tasarrufu   │
+├────────────────────────────┼─────────────────┼────────────────────────────┤
+│ /logitech/image_mono       │ sensor_msgs/    │ Gri tonlama (mono8)        │
+│                            │ Image           │ Edge detection, SLAM için  │
+├────────────────────────────┼─────────────────┼────────────────────────────┤
+│ /logitech/image_rect       │ sensor_msgs/    │ Lens distorsiyonu          │
+│                            │ Image           │ düzeltilmiş görüntü        │
+├────────────────────────────┼─────────────────┼────────────────────────────┤
+│ /logitech/camera_info      │ sensor_msgs/    │ Kalibrasyon parametreleri  │
+│                            │ CameraInfo      │ K, D, R, P matrisleri      │
+└────────────────────────────┴─────────────────┴────────────────────────────┘
+
+KONFİGÜRASYON PARAMETRELERİ:
+----------------------------
+Parametre          Varsayılan   Açıklama
+─────────────────────────────────────────────────────────────────────────────
+camera_id          0            USB kamera device ID (/dev/videoX)
+width              640          Görüntü genişliği (piksel)
+height             480          Görüntü yüksekliği (piksel)
+fps                30           Hedef frame rate (Hz)
+jpeg_quality       85           JPEG sıkıştırma kalitesi (0-100)
+auto_exposure      True         Otomatik pozlama aktif/pasif
+enable_compressed  True         Compressed topic yayını aktif/pasif
+enable_mono        True         Mono (grayscale) topic yayını aktif/pasif
+brightness         128          Parlaklık (0-255)
+contrast           32           Kontrast (0-255)
+saturation         32           Doygunluk (0-255)
+
+KULLANIM ÖRNEKLERİ:
+-------------------
+# Varsayılan parametrelerle başlatma:
+$ ros2 run <paket_adi> logitech_publisher
+
+# Özel parametrelerle başlatma:
+$ ros2 run <paket_adi> logitech_publisher --ros-args \
+    -p camera_id:=0 \
+    -p width:=1280 \
+    -p height:=720 \
+    -p fps:=30 \
+    -p jpeg_quality:=90
+
+# Launch dosyası ile başlatma:
+$ ros2 launch <paket_adi> camera.launch.py
+
+# Topic'leri görüntüleme:
+$ ros2 topic list | grep logitech
+$ ros2 topic hz /logitech/image_raw
+$ ros2 topic echo /logitech/camera_info
+
+# rqt_image_view ile görüntüleme:
+$ ros2 run rqt_image_view rqt_image_view
+
+BAĞIMLILIKLAR:
+--------------
+- rclpy          : ROS 2 Python client library
+- sensor_msgs    : Image, CameraInfo, CompressedImage mesaj tipleri
+- cv_bridge      : OpenCV <-> ROS mesaj dönüşümü
+- opencv-python  : Kamera erişimi ve görüntü işleme
+- numpy          : Sayısal hesaplamalar
+
+SINIF HİYERARŞİSİ:
+------------------
+rclpy.node.Node
+       │
+       └── LogitechPublisher
+              │
+              ├── __init__()          : Parametre ve publisher başlatma
+              ├── create_publishers() : Topic publisher'ları oluşturma
+              ├── initialize_camera() : OpenCV kamera yapılandırma
+              ├── publish_frame()     : Ana timer callback fonksiyonu
+              ├── publish_raw_image() : BGR8 raw görüntü yayını
+              ├── publish_compressed_image() : JPEG sıkıştırılmış yayın
+              ├── publish_mono_image(): Grayscale görüntü yayını
+              ├── publish_rectified_image() : Düzeltilmiş görüntü yayını
+              ├── create_default_camera_info() : Kalibrasyon matrisi
+              ├── print_stats()       : Performans istatistikleri
+              └── destroy_node()      : Temizlik ve kaynak serbest bırakma
+
+PERFORMANS NOTLARI:
+-------------------
+- MJPEG codec kullanılarak USB bant genişliği optimize edilir
+- Frame queue boyutu 10 olarak ayarlanmıştır (QoS)
+- Düşük frame kayıp oranı için buffer boyutu minimize edilmiştir
+- 640x480 @ 30 FPS tipik CPU kullanımı: ~5-10%
+- 1280x720 @ 30 FPS tipik CPU kullanımı: ~10-15%
+
+KALİBRASYON:
+------------
+Gerçek kalibrasyon için ROS 2 camera_calibration paketi kullanılabilir:
+$ ros2 run camera_calibration cameracalibrator \
+    --size 8x6 \
+    --square 0.025 \
+    --ros-args -r image:=/logitech/image_raw
+
+Kalibrasyon sonrası elde edilen K, D, R, P matrisleri
+create_default_camera_info() fonksiyonunda güncellenmelidir.
+
+HATA AYIKLAMA:
+--------------
+- Kamera bulunamazsa: ls /dev/video* ile mevcut kameraları kontrol edin
+- Permission hatası: sudo usermod -a -G video $USER
+- Düşük FPS: USB 2.0 port veya çözünürlüğü düşürmeyi deneyin
+- Frame kayıpları: fps parametresini düşürün veya jpeg_quality azaltın
+
+================================================================================
 """
 
 import rclpy
