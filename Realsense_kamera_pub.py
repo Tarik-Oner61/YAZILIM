@@ -734,7 +734,9 @@ class RealSensePublisher(Node):
         ]
         
         # Rectification matrix (R) - identity için
-        msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        msg.r = [1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0]
         
         # Projection matrix (P)
         msg.p = [
