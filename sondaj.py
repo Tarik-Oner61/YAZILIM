@@ -1,2 +1,2 @@
-""" Sondaj görevi - Mehmet """
+""" Sondaj görevi - Defne """
 print("sondaj görevi")
